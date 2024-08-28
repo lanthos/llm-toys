@@ -4,7 +4,9 @@ generate an Obsidian markdown file with the transcription and a summary of the t
 """
 import argparse
 import json
+import logging
 import subprocess
+import warnings
 import whisper
 
 from datetime import datetime
@@ -13,6 +15,18 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from pathlib import Path
 
+# ignoring warning for active fix waiting for someone at openai to approve a PR
+warnings.filterwarnings("ignore", category=FutureWarning)
+script_directory = Path(__file__).parent
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 template_dir = Path(__file__).parent / 'templates'
 env = Environment(loader=FileSystemLoader(template_dir), autoescape=True)
 
@@ -33,13 +47,13 @@ def run_command(command):
 
 
 def extract_audio(url):
-    command = f'yt-dlp -x {url} -o "audio.%(ext)s"'
+    command = f'yt-dlp -x --audio-format m4a {url} -o "audio.%(ext)s"'
     run_command(command)
 
 
 def transcribe_audio(audio_path):
     whisper_model = whisper.load_model("base")
-    result = whisper_model.transcribe(audio_path)
+    result = whisper_model.transcribe(audio_path, fp16=False)
     return result['text']
 
 
@@ -82,18 +96,22 @@ if __name__ == '__main__':
     parser.add_argument("url", help="URL to include in the Obsidian markdown file.")
 
     args = parser.parse_args()
-    print("Extracting audio from video...")
+    logger.info("Extracting audio from video...")
     extract_audio(args.url)
-    print("Transcribing audio...")
-    transcription = transcribe_audio("audio.m4a")
-    print("Generating LLM response...")
+    audio_file = next(script_directory.glob("audio*"), None)
+    if not audio_file:
+        logger.error("Could not find audio file.")
+        exit(1)
+    logger.info("Transcribing audio...")
+    transcription = transcribe_audio(audio_file.name)
+    logger.info("Generating LLM response...")
     llm_response = generate_llm_response(transcription)
     llm_response_dict = remove_llm_json_formatting(llm_response)
     llm_response_dict["url"] = args.url
     llm_response_dict["transcription"] = transcription
-    print(json.dumps(llm_response_dict, indent=4))
+    logger.info(json.dumps(llm_response_dict, indent=4))
     template = env.get_template('video_extracted_template.md')
     output = template.render(llm_response_dict)
     output_file = Path(f'{datetime.now().isoformat()}-output.md')
     output_file.write_text(output)
-    Path("audio.m4a").unlink()
+    Path(audio_file).unlink()
