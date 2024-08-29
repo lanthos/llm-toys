@@ -9,6 +9,7 @@ import subprocess
 import warnings
 import whisper
 
+from config import settings
 from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
 from langchain_ollama import ChatOllama
@@ -51,16 +52,15 @@ def extract_audio(url):
     run_command(command)
 
 
-def transcribe_audio(audio_path):
-    whisper_model = whisper.load_model("base")
-    result = whisper_model.transcribe(audio_path, fp16=False)
+def transcribe_audio(audio_path, model_size, language):
+    whisper_model = whisper.load_model(model_size)
+    result = whisper_model.transcribe(audio_path, fp16=False, language=language)
     return result['text']
 
 
 def generate_llm_response(transcription_text):
-    # Example using OpenLlama; adjust as per your setup
     llm = ChatOllama(
-        model="llama3.1",
+        model=settings.llm_model,
         temperature=0,
     )
     prompt = ChatPromptTemplate.from_messages(
@@ -94,6 +94,8 @@ def remove_llm_json_formatting(llm_text):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Transcribe audio and generate markdown files.")
     parser.add_argument("url", help="URL to include in the Obsidian markdown file.")
+    parser.add_argument("--model_size", default="small", help="Model size to use for the transcription.")
+    parser.add_argument("--language", default="english", help="Language to use for the transcription.")
 
     args = parser.parse_args()
     logger.info("Extracting audio from video...")
@@ -102,16 +104,22 @@ if __name__ == '__main__':
     if not audio_file:
         logger.error("Could not find audio file.")
         exit(1)
+
     logger.info("Transcribing audio...")
-    transcription = transcribe_audio(audio_file.name)
+    transcription = transcribe_audio(audio_file.name, args.model_size, args.language)
+
     logger.info("Generating LLM response...")
     llm_response = generate_llm_response(transcription)
     llm_response_dict = remove_llm_json_formatting(llm_response)
     llm_response_dict["url"] = args.url
     llm_response_dict["transcription"] = transcription
     logger.info(json.dumps(llm_response_dict, indent=4))
+
+    logger.info("Generating markdown file...")
     template = env.get_template('video_extracted_template.md')
     output = template.render(llm_response_dict)
-    output_file = Path(f'{datetime.now().isoformat()}-output.md')
+    output_file = Path(f'temporary_files/{datetime.now().isoformat()}-output.md')
     output_file.write_text(output)
+
+    logger.info("Cleaning up...")
     Path(audio_file).unlink()

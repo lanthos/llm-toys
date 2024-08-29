@@ -1,0 +1,2 @@
+embeddings_model = "nomic-embed-text"
+llm_model = "llama3.1"
